@@ -1,7 +1,6 @@
 mod server;
 mod db;
 mod commands;
-
 use db::Database;
 use server::run_server;
 use std::sync::Arc;

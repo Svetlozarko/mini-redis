@@ -11,6 +11,7 @@ pub fn handle_command(input: &str, db: &Arc<Database>) -> String {
         }
 
         ["GET", key] => {
+            // Sliding TTL refresh happens inside db.get()
             if let Some(value) = db.get(key) {
                 format!("${}\n{}\n", value.len(), value)
             } else {
