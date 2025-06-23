@@ -50,6 +50,24 @@ pub fn handle_command(input: &str, db: &Arc<Database>) -> String {
             Err(_) => "-ERR invalid expiration time\n".to_string(),
         }
 
+        ["TTL", key] => {
+            let ttl = db.ttl(key);
+            format!(":{}\n", ttl)
+        }
+
+        ["PERSIST", key] => {
+            if db.persist(key) {
+                ":1\n".to_string()
+            } else {
+                ":0\n".to_string()
+            }
+        }
+
+        ["FLUSHDB"] => {
+            db.flushdb();
+            "+OK\n".to_string()
+        }
+
         _ => "-ERR unknown command or wrong number of arguments\n".to_string(),
     }
 }
