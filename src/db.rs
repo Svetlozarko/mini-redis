@@ -9,6 +9,7 @@ use std::io::{BufReader, BufWriter};
 pub struct Entry {
     value: String,
     expires_at: Option<u64>, // UNIX timestamp in seconds
+    ttl: Option<u64>,        // TTL duration in seconds (for sliding expiration)
 }
 
 pub struct Database {
@@ -23,16 +24,21 @@ impl Database {
     }
 
     pub fn set(&self, key: String, value: String) {
-        self.store.insert(key, Entry { value, expires_at: None });
+        self.store.insert(key, Entry { value, expires_at: None, ttl: None });
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
-        self.store.get(key).and_then(|entry| {
+        self.store.get_mut(key).and_then(|mut entry| {
+            // Check expiration
             if let Some(exp) = entry.expires_at {
                 if current_timestamp() >= exp {
                     drop(entry);
                     self.store.remove(key);
                     return None;
+                }
+                // Sliding TTL: refresh expires_at if ttl is set
+                if let Some(ttl_sec) = entry.ttl {
+                    entry.expires_at = Some(current_timestamp() + ttl_sec);
                 }
             }
             Some(entry.value.clone())
@@ -62,6 +68,7 @@ impl Database {
     pub fn expire(&self, key: &str, seconds: u64) -> bool {
         if let Some(mut entry) = self.store.get_mut(key) {
             entry.expires_at = Some(current_timestamp() + seconds);
+            entry.ttl = Some(seconds);  // set TTL for sliding expiration
             true
         } else {
             false
@@ -90,6 +97,7 @@ impl Database {
         if let Some(mut entry) = self.store.get_mut(key) {
             if entry.expires_at.is_some() {
                 entry.expires_at = None;
+                entry.ttl = None;
                 true
             } else {
                 false // no expiration to remove
