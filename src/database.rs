@@ -7,8 +7,8 @@ pub type Database = Arc<RwLock<RedisDatabase>>;
 
 #[derive(Debug)]
 pub struct RedisDatabase {
-    data: HashMap<String, RedisValue>,
-    expires: HashMap<String, Instant>,
+    pub data: HashMap<String, RedisValue>,
+    pub expires: HashMap<String, Instant>,
 }
 
 impl RedisDatabase {
@@ -114,4 +114,8 @@ impl RedisDatabase {
 
 pub fn create_database() -> Database {
     Arc::new(RwLock::new(RedisDatabase::new()))
+}
+
+pub fn create_database_with_data(db: RedisDatabase) -> Database {
+    Arc::new(RwLock::new(db))
 }
