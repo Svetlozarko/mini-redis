@@ -3,7 +3,9 @@ use crate::database::Database;
 use crate::auth::ClientAuth;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
+use tokio::sync::RwLock;
 
+use crate::database::RedisDatabase;
 #[derive(Debug, Clone)]
 pub enum Command {
     // String commands
@@ -232,6 +234,7 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
             // This should not be reached due to early return above
             "OK".to_string()
         },
+        
 
         Command::Quit => "OK".to_string(),
 
