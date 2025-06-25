@@ -232,6 +232,26 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
             Ok(Command::ShowAll)
         },
 
+        "MERGE" => {
+            if parts.len() < 2 {
+                return Err("ERR wrong number of arguments for 'merge' command".to_string());
+            }
+
+            let file_path = parts[1].to_string();
+            let strategy = if parts.len() > 2 {
+                match parts[2].to_uppercase().as_str() {
+                    "OVERWRITE" => crate::commands::MergeStrategy::Overwrite,
+                    "SKIP" => crate::commands::MergeStrategy::Skip,
+                    "MERGE" => crate::commands::MergeStrategy::Merge,
+                    _ => return Err("ERR invalid merge strategy. Use OVERWRITE, SKIP, or MERGE".to_string()),
+                }
+            } else {
+                crate::commands::MergeStrategy::Overwrite // Default strategy
+            };
+
+            Ok(Command::Merge { file_path, strategy })
+        },
+
         "QUIT" => {
             Ok(Command::Quit)
         },

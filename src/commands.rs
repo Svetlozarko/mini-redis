@@ -1,8 +1,17 @@
 use crate::data_types::RedisValue;
-use crate::database::Database;
+use crate::database::RedisDatabase;
 use crate::auth::ClientAuth;
+use crate::persistence_clean::MmapPersistence;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
+use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub enum MergeStrategy {
+    Overwrite, // Overwrite existing keys with new values
+    Skip,      // Skip keys that already exist
+    Merge,     // Merge collections (lists, sets, hashes)
+}
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -52,12 +61,13 @@ pub enum Command {
     Echo { message: String },
     Auth { password: String },
     Info,
-    Memory,  // <-- Added this line
-    Quit,
+    Memory,
     ShowAll,
+    Merge { file_path: String, strategy: MergeStrategy },
+    Quit,
 }
 
-pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientAuth) -> String {
+pub fn execute_command(db: Arc<std::sync::RwLock<RedisDatabase>>, command: Command, client_auth: &mut ClientAuth) -> String {
     // Check authentication for all commands except AUTH
     if let Command::Auth { password } = &command {
         if client_auth.authenticate(password) {
@@ -74,8 +84,8 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
 
     match command {
         Command::Get { key } => {
-            let mut db = db.write().unwrap();
-            match db.get(&key) {
+            let mut db_write = db.write().unwrap();
+            match db_write.get(&key) {
                 Some(RedisValue::String(s)) => format!("\"{}\"", s),
                 Some(RedisValue::Integer(i)) => i.to_string(),
                 Some(_) => "(error) WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
@@ -84,22 +94,22 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
         },
 
         Command::Set { key, value } => {
-            let mut db = db.write().unwrap();
-            db.set(key, RedisValue::String(value));
+            let mut db_write = db.write().unwrap();
+            db_write.set(key, RedisValue::String(value));
             "OK".to_string()
         },
 
         Command::SetEx { key, value, seconds } => {
-            let mut db = db.write().unwrap();
-            db.set_with_expiry(key, RedisValue::String(value), Duration::from_secs(seconds));
+            let mut db_write = db.write().unwrap();
+            db_write.set_with_expiry(key, RedisValue::String(value), Duration::from_secs(seconds));
             "OK".to_string()
         },
 
         Command::Del { keys } => {
-            let mut db = db.write().unwrap();
+            let mut db_write = db.write().unwrap();
             let mut count = 0;
             for key in keys {
-                if db.delete(&key) {
+                if db_write.delete(&key) {
                     count += 1;
                 }
             }
@@ -107,10 +117,10 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
         },
 
         Command::Exists { keys } => {
-            let mut db = db.write().unwrap();
+            let mut db_write = db.write().unwrap();
             let mut count = 0;
             for key in keys {
-                if db.exists(&key) {
+                if db_write.exists(&key) {
                     count += 1;
                 }
             }
@@ -118,16 +128,19 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
         },
 
         Command::Incr { key } => {
-            let mut db = db.write().unwrap();
-            match db.get_mut(&key) {
+            let mut db_write = db.write().unwrap();
+
+            // Get the current value, increment it, then set it back
+            match db_write.get(&key) {
                 Some(RedisValue::Integer(i)) => {
-                    *i += 1;
-                    format!("(integer) {}", *i)
+                    let new_val = i + 1;
+                    db_write.set(key, RedisValue::Integer(new_val));
+                    format!("(integer) {}", new_val)
                 },
                 Some(RedisValue::String(s)) => {
                     if let Ok(i) = s.parse::<i64>() {
                         let new_val = i + 1;
-                        db.set(key, RedisValue::Integer(new_val));
+                        db_write.set(key, RedisValue::Integer(new_val));
                         format!("(integer) {}", new_val)
                     } else {
                         "(error) ERR value is not an integer or out of range".to_string()
@@ -135,67 +148,73 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
                 },
                 Some(_) => "(error) WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
                 None => {
-                    db.set(key, RedisValue::Integer(1));
+                    db_write.set(key, RedisValue::Integer(1));
                     "(integer) 1".to_string()
                 }
             }
         },
 
         Command::LPush { key, values } => {
-            let mut db = db.write().unwrap();
-            let list = match db.get_mut(&key) {
-                Some(RedisValue::List(list)) => list,
+            let mut db_write = db.write().unwrap();
+
+            // Get existing list or create new one
+            let mut list = match db_write.get(&key) {
+                Some(RedisValue::List(existing_list)) => existing_list.clone(),
                 Some(_) => return "(error) WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
-                None => {
-                    db.set(key.clone(), RedisValue::List(VecDeque::new()));
-                    db.get_mut(&key).unwrap().as_list_mut().unwrap()
-                }
+                None => VecDeque::new(),
             };
 
+            // Add values to front of list
             for value in values.iter().rev() {
                 list.push_front(value.clone());
             }
-            format!("(integer) {}", list.len())
+
+            let list_len = list.len();
+            db_write.set(key, RedisValue::List(list));
+            format!("(integer) {}", list_len)
         },
 
         Command::SAdd { key, members } => {
-            let mut db = db.write().unwrap();
-            let set = match db.get_mut(&key) {
-                Some(RedisValue::Set(set)) => set,
+            let mut db_write = db.write().unwrap();
+
+            // Get existing set or create new one
+            let mut set = match db_write.get(&key) {
+                Some(RedisValue::Set(existing_set)) => existing_set.clone(),
                 Some(_) => return "(error) WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
-                None => {
-                    db.set(key.clone(), RedisValue::Set(HashSet::new()));
-                    db.get_mut(&key).unwrap().as_set_mut().unwrap()
-                }
+                None => HashSet::new(),
             };
 
+            // Add members to set
             let mut added = 0;
             for member in members {
                 if set.insert(member) {
                     added += 1;
                 }
             }
+
+            db_write.set(key, RedisValue::Set(set));
             format!("(integer) {}", added)
         },
 
         Command::HSet { key, field, value } => {
-            let mut db = db.write().unwrap();
-            let hash = match db.get_mut(&key) {
-                Some(RedisValue::Hash(hash)) => hash,
+            let mut db_write = db.write().unwrap();
+
+            // Get existing hash or create new one
+            let mut hash = match db_write.get(&key) {
+                Some(RedisValue::Hash(existing_hash)) => existing_hash.clone(),
                 Some(_) => return "(error) WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
-                None => {
-                    db.set(key.clone(), RedisValue::Hash(HashMap::new()));
-                    db.get_mut(&key).unwrap().as_hash_mut().unwrap()
-                }
+                None => HashMap::new(),
             };
 
+            // Insert field-value pair
             let is_new = hash.insert(field, value).is_none();
+            db_write.set(key, RedisValue::Hash(hash));
             format!("(integer) {}", if is_new { 1 } else { 0 })
         },
 
         Command::Keys { pattern: _ } => {
-            let db = db.read().unwrap();
-            let keys = db.keys();
+            let mut db_write = db.write().unwrap();
+            let keys = db_write.keys();
             if keys.is_empty() {
                 "(empty array)".to_string()
             } else {
@@ -208,50 +227,33 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
         },
 
         Command::Info => {
-            let db = db.read().unwrap();
+            let mut db_write = db.write().unwrap();
             let info = format!(
                 "# Server\nredis_version:7.0.0-clone\nredis_mode:standalone\n# Memory\nused_memory:{}\n# Keyspace\ndb0:keys={}",
-                db.size() * 100, // Rough memory estimate
-                db.size()
+                db_write.size() * 100, // Rough memory estimate
+                db_write.size()
             );
             format!("\"{}\"", info)
         },
 
         Command::Memory => {
-            let db = db.read().unwrap();
-            let memory_usage = calculate_memory_usage(&db);
+            let mut db_write = db.write().unwrap();
+            let memory_usage = calculate_memory_usage(&db_write);
             format!("used_memory:{}\nused_memory_human:{}", memory_usage, format_bytes(memory_usage))
         },
 
-        Command::FlushAll => {
-            let mut db = db.write().unwrap();
-            db.clear();
-            "OK".to_string()
-        },
-
-        Command::Ping { message } => {
-            match message {
-                Some(msg) => format!("\"{}\"", msg),
-                None => "PONG".to_string(),
-            }
-        },
-
-        Command::Auth { .. } => {
-            // This should not be reached due to early return above
-            "OK".to_string()
-        },
         Command::ShowAll => {
-            let db = db.read().unwrap();
-            if db.data.is_empty() {
+            let mut db_write = db.write().unwrap();
+            if db_write.data.is_empty() {
                 return "(empty database)".to_string();
             }
 
             let mut result = String::new();
-            result.push_str(&format!("=== DATABASE CONTENTS ({} keys) ===\n", db.data.len()));
+            result.push_str(&format!("=== DATABASE CONTENTS ({} keys) ===\n", db_write.data.len()));
 
-            for (key, value) in &db.data {
+            for (key, value) in &db_write.data {
                 // Check if key has TTL
-                let ttl_info = if let Some(expire_time) = db.expires.get(key) {
+                let ttl_info = if let Some(expire_time) = db_write.expires.get(key) {
                     let now = std::time::Instant::now();
                     if *expire_time > now {
                         let remaining = (*expire_time - now).as_secs();
@@ -308,17 +310,131 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
             result.push_str("=== END OF DATABASE ===");
             result
         },
-        
-        
-        
-        
+
+        Command::Merge { file_path, strategy } => {
+            let mut db_write = db.write().unwrap();
+
+            // Load the database to merge from
+            let persistence = MmapPersistence::new(file_path.clone());
+            let merge_db = match persistence.load_database() {
+                Ok(db) => db,
+                Err(e) => return format!("(error) ERR failed to load merge file: {}", e),
+            };
+
+            let mut merged_count = 0;
+            let mut skipped_count = 0;
+            let mut overwritten_count = 0;
+
+            // Merge data
+            for (key, value) in merge_db.data {
+                let key_exists = db_write.exists(&key);
+
+                match strategy {
+                    MergeStrategy::Overwrite => {
+                        if key_exists {
+                            overwritten_count += 1;
+                        } else {
+                            merged_count += 1;
+                        }
+                        db_write.set(key, value);
+                    },
+
+                    MergeStrategy::Skip => {
+                        if key_exists {
+                            skipped_count += 1;
+                        } else {
+                            db_write.set(key, value);
+                            merged_count += 1;
+                        }
+                    },
+
+                    MergeStrategy::Merge => {
+                        if key_exists {
+                            // Try to merge collections
+                            match (db_write.get(&key), &value) {
+                                (Some(RedisValue::List(existing_list)), RedisValue::List(new_list)) => {
+                                    let mut combined_list = existing_list.clone();
+                                    for item in new_list {
+                                        if !combined_list.contains(item) {
+                                            combined_list.push_back(item.clone());
+                                        }
+                                    }
+                                    db_write.set(key, RedisValue::List(combined_list));
+                                    merged_count += 1;
+                                },
+
+                                (Some(RedisValue::Set(existing_set)), RedisValue::Set(new_set)) => {
+                                    let mut combined_set = existing_set.clone();
+                                    for item in new_set {
+                                        combined_set.insert(item.clone());
+                                    }
+                                    db_write.set(key, RedisValue::Set(combined_set));
+                                    merged_count += 1;
+                                },
+
+                                (Some(RedisValue::Hash(existing_hash)), RedisValue::Hash(new_hash)) => {
+                                    let mut combined_hash = existing_hash.clone();
+                                    for (field, val) in new_hash {
+                                        combined_hash.insert(field.clone(), val.clone());
+                                    }
+                                    db_write.set(key, RedisValue::Hash(combined_hash));
+                                    merged_count += 1;
+                                },
+
+                                _ => {
+                                    // Different types or non-mergeable, overwrite
+                                    db_write.set(key, value);
+                                    overwritten_count += 1;
+                                }
+                            }
+                        } else {
+                            db_write.set(key, value);
+                            merged_count += 1;
+                        }
+                    }
+                }
+            }
+
+            // Merge TTL information - simplified approach
+            for (key, _expire_time) in merge_db.expires {
+                if db_write.exists(&key) {
+                    // Note: TTL merging is complex due to Instant vs SystemTime conversion
+                    // For now, we'll skip TTL merging to avoid compilation issues
+                    // You can implement this later if needed
+                }
+            }
+
+            format!(
+                "OK - Merged from '{}' using {:?} strategy\nNew keys: {}\nOverwritten: {}\nSkipped: {}",
+                file_path, strategy, merged_count, overwritten_count, skipped_count
+            )
+        },
+
+        Command::FlushAll => {
+            let mut db_write = db.write().unwrap();
+            db_write.clear();
+            "OK".to_string()
+        },
+
+        Command::Ping { message } => {
+            match message {
+                Some(msg) => format!("\"{}\"", msg),
+                None => "PONG".to_string(),
+            }
+        },
+
+        Command::Auth { .. } => {
+            // This should not be reached due to early return above
+            "OK".to_string()
+        },
+
         Command::Quit => "OK".to_string(),
 
         _ => "(error) ERR unknown command".to_string(),
     }
 }
 
-fn calculate_memory_usage(db: &std::sync::RwLockReadGuard<crate::database::RedisDatabase>) -> usize {
+fn calculate_memory_usage(db: &std::sync::RwLockWriteGuard<RedisDatabase>) -> usize {
     let mut total_size = 0;
 
     // Calculate size of data HashMap
@@ -364,4 +480,3 @@ fn format_bytes(bytes: usize) -> String {
         format!("{:.2}{}", size, UNITS[unit_index])
     }
 }
-
