@@ -3,6 +3,7 @@ mod database;
 mod commands;
 mod protocol;
 mod data_types;
+mod auth;
 
 use clap::Parser;
 use server::Server;
