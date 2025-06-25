@@ -1,5 +1,5 @@
 [package]
-name = "rust_redis"
+name = "untitled5"
 version = "0.1.0"
 edition = "2024"
 
@@ -9,8 +9,6 @@ dashmap = "5"
 anyhow = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+clap = { version = "4.5.40", features = ["derive"] }
 
-[[bin]]
-name = "manual_test"
-path = "manual_test.rs"
 

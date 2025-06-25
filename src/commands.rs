@@ -101,7 +101,7 @@ pub fn execute_command(db: Database, command: Command) -> String {
         Command::Incr { key } => {
             let mut db = db.write().unwrap();
             match db.get_mut(&key) {
-                Some(RedisValue::Integer(ref mut i)) => {
+                Some(RedisValue::Integer(i)) => {
                     *i += 1;
                     format!("(integer) {}", *i)
                 },
@@ -125,7 +125,7 @@ pub fn execute_command(db: Database, command: Command) -> String {
         Command::Decr { key } => {
             let mut db = db.write().unwrap();
             match db.get_mut(&key) {
-                Some(RedisValue::Integer(ref mut i)) => {
+                Some(RedisValue::Integer(i)) => {
                     *i -= 1;
                     format!("(integer) {}", *i)
                 },
