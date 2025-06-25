@@ -374,7 +374,7 @@ pub fn execute_command(db: Database, command: Command) -> String {
             format!("\"{}\"", message)
         },
 
-        Command::Quit => {
+        Command::Quit => { 
             "OK".to_string()
         },
 
