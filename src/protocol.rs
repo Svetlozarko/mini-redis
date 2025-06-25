@@ -224,6 +224,10 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
             Ok(Command::Info)
         },
 
+        "MEMORY" => {
+            Ok(Command::Memory)
+        },
+
         "QUIT" => {
             Ok(Command::Quit)
         },

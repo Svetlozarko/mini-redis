@@ -3,9 +3,7 @@ use crate::database::Database;
 use crate::auth::ClientAuth;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
-use tokio::sync::RwLock;
 
-use crate::database::RedisDatabase;
 #[derive(Debug, Clone)]
 pub enum Command {
     // String commands
@@ -54,6 +52,7 @@ pub enum Command {
     Echo { message: String },
     Auth { password: String },
     Info,
+    Memory,  // <-- Added this line
     Quit,
 }
 
@@ -217,6 +216,12 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
             format!("\"{}\"", info)
         },
 
+        Command::Memory => {
+            let db = db.read().unwrap();
+            let memory_usage = calculate_memory_usage(&db);
+            format!("used_memory:{}\nused_memory_human:{}", memory_usage, format_bytes(memory_usage))
+        },
+
         Command::FlushAll => {
             let mut db = db.write().unwrap();
             db.clear();
@@ -234,10 +239,56 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
             // This should not be reached due to early return above
             "OK".to_string()
         },
-        
 
         Command::Quit => "OK".to_string(),
 
         _ => "(error) ERR unknown command".to_string(),
+    }
+}
+
+fn calculate_memory_usage(db: &std::sync::RwLockReadGuard<crate::database::RedisDatabase>) -> usize {
+    let mut total_size = 0;
+
+    // Calculate size of data HashMap
+    for (key, value) in &db.data {
+        total_size += key.len(); // Key size
+        total_size += match value {
+            RedisValue::String(s) => s.len(),
+            RedisValue::Integer(_) => 8, // i64 size
+            RedisValue::List(list) => {
+                list.iter().map(|item| item.len()).sum::<usize>() + (list.len() * 8) // Vec overhead
+            },
+            RedisValue::Set(set) => {
+                set.iter().map(|item| item.len()).sum::<usize>() + (set.len() * 8) // HashSet overhead
+            },
+            RedisValue::Hash(hash) => {
+                hash.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() + (hash.len() * 16) // HashMap overhead
+            },
+        };
+    }
+
+    // Calculate size of expires HashMap
+    total_size += db.expires.len() * (std::mem::size_of::<String>() + std::mem::size_of::<std::time::Instant>());
+
+    // Add some overhead for the data structures themselves
+    total_size += 1024; // Base overhead
+
+    total_size
+}
+
+fn format_bytes(bytes: usize) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+
+    if unit_index == 0 {
+        format!("{:.0}{}", size, UNITS[unit_index])
+    } else {
+        format!("{:.2}{}", size, UNITS[unit_index])
     }
 }
