@@ -1,31 +1,31 @@
 mod server;
-mod db;
+mod database;
 mod commands;
-use db::Database;
-use server::run_server;
-use std::sync::Arc;
-use tokio::signal;
-use anyhow::Result;
+mod protocol;
+mod data_types;
+
+use clap::Parser;
+use server::Server;
+
+#[derive(Parser)]
+#[command(name = "redis-clone")]
+#[command(about = "A Redis-like database implementation in Rust")]
+struct Args {
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    #[arg(short, long, default_value = "6379")]
+    port: u16,
+}
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let db = Database::new();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
 
-    // Try loading snapshot from disk at startup
-    let _ = db.load_snapshot("dump.json");
+    println!("Starting Redis-clone server on {}:{}", args.host, args.port);
 
-    let db_clone = Arc::clone(&db);
+    let server = Server::new(args.host, args.port);
+    server.run().await?;
 
-    // Spawn a task to save snapshot on Ctrl+C
-    tokio::spawn(async move {
-        signal::ctrl_c().await.expect("failed to listen for ctrl_c");
-        println!("Received Ctrl+C, saving snapshot...");
-        if let Err(e) = db_clone.save_snapshot("dump.json") {
-            eprintln!("Error saving snapshot: {:?}", e);
-        }
-        std::process::exit(0);
-    });
-
-    // Run the server, pass db instance
-    run_server("127.0.0.1:6379", db).await
+    Ok(())
 }
