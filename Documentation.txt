@@ -1,0 +1,1106 @@
+================================================================================
+                    REDIS CLONE SERVER - COMMANDS DOCUMENTATION
+================================================================================
+
+OVERVIEW
+========
+This document provides detailed documentation for all Redis commands implemented
+in the Redis Clone Server. Each command includes syntax, behavior, return values,
+error conditions, and implementation details.
+
+COMMAND CATEGORIES
+==================
+1. Connection & Server Commands
+2. String Commands
+3. List Commands
+4. Set Commands
+5. Hash Commands
+6. Key Management Commands
+7. TTL & Expiration Commands
+8. Server Information Commands
+
+================================================================================
+                        1. CONNECTION & SERVER COMMANDS
+================================================================================
+
+PING [message]
+--------------
+PURPOSE: Test server connectivity and responsiveness
+SYNTAX: PING [message]
+ARGUMENTS:
+  - message (optional): Custom message to echo back
+
+BEHAVIOR:
+- Without message: Returns "PONG"
+- With message: Returns the provided message
+- Used for connection testing and keep-alive
+
+EXAMPLES:
+redis-clone> PING
+PONG
+redis-clone> PING "Hello World"
+"Hello World"
+
+IMPLEMENTATION NOTES:
+- Simple connectivity test
+- No database interaction required
+- Always succeeds unless connection is broken
+
+---
+
+ECHO message
+------------
+PURPOSE: Echo the given string back to client
+SYNTAX: ECHO message
+ARGUMENTS:
+  - message (required): String to echo back
+
+BEHAVIOR:
+- Returns exactly the message provided
+- Useful for testing and debugging
+- Supports multi-word messages (joined with spaces)
+
+EXAMPLES:
+redis-clone> ECHO "Hello Redis"
+Hello Redis
+redis-clone> ECHO test message
+test message
+
+ERROR CONDITIONS:
+- Missing message: "ERR wrong number of arguments for 'echo' command"
+
+---
+
+AUTH password
+-------------
+PURPOSE: Authenticate client with server password
+SYNTAX: AUTH password
+ARGUMENTS:
+  - password (required): Authentication password
+
+BEHAVIOR:
+- Validates password against server configuration
+- Sets client authentication state
+- Required before other commands if password is set
+- Session-based (remains authenticated until disconnect)
+
+EXAMPLES:
+redis-clone> AUTH mypassword
+OK
+redis-clone> AUTH wrongpassword
+(error) ERR invalid password
+
+ERROR CONDITIONS:
+- Wrong password: "(error) ERR invalid password"
+- Missing password: "ERR wrong number of arguments for 'auth' command"
+- Already authenticated: Still returns OK
+
+SECURITY NOTES:
+- Password sent in plaintext
+- Authentication state per connection
+- All commands except AUTH blocked until authenticated
+
+---
+
+QUIT
+----
+PURPOSE: Close client connection gracefully
+SYNTAX: QUIT
+ARGUMENTS: None
+
+BEHAVIOR:
+- Returns "OK" and closes connection
+- Graceful disconnect
+- Cleans up client resources
+
+EXAMPLES:
+redis-clone> QUIT
+OK
+[Connection closed]
+
+IMPLEMENTATION NOTES:
+- Triggers connection cleanup
+- No database state changes
+- Always succeeds
+
+================================================================================
+                            2. STRING COMMANDS
+================================================================================
+
+GET key
+-------
+PURPOSE: Retrieve string value stored at key
+SYNTAX: GET key
+ARGUMENTS:
+  - key (required): Key name to retrieve
+
+BEHAVIOR:
+- Returns string value if key exists and is string type
+- Returns "(nil)" if key doesn't exist
+- Type error if key holds non-string value
+
+EXAMPLES:
+redis-clone> SET mykey "Hello"
+OK
+redis-clone> GET mykey
+"Hello"
+redis-clone> GET nonexistent
+(nil)
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+- Missing key argument: "ERR wrong number of arguments for 'get' command"
+
+IMPLEMENTATION DETAILS:
+- Read lock on database
+- Direct HashMap lookup
+- Type checking for RedisValue::String
+
+---
+
+SET key value [EX seconds]
+--------------------------
+PURPOSE: Set string value at key with optional expiration
+SYNTAX: SET key value [EX seconds]
+ARGUMENTS:
+  - key (required): Key name to set
+  - value (required): String value to store
+  - EX seconds (optional): Expiration time in seconds
+
+BEHAVIOR:
+- Stores string value at key
+- Overwrites existing value regardless of type
+- Optional expiration with EX modifier
+- Returns "OK" on success
+
+EXAMPLES:
+redis-clone> SET mykey "Hello World"
+OK
+redis-clone> SET session:123 "user_data" EX 3600
+OK
+redis-clone> GET mykey
+"Hello World"
+
+ERROR CONDITIONS:
+- Missing arguments: "ERR wrong number of arguments for 'set' command"
+- Invalid expiration: "ERR invalid expire time in set"
+- Syntax error: "ERR syntax error"
+
+IMPLEMENTATION DETAILS:
+- Write lock on database
+- Creates RedisValue::String
+- Handles TTL via set_with_expiry for EX variant
+- Atomic operation
+
+---
+
+INCR key
+--------
+PURPOSE: Increment integer value stored at key by 1
+SYNTAX: INCR key
+ARGUMENTS:
+  - key (required): Key containing integer value
+
+BEHAVIOR:
+- Increments integer value by 1
+- Creates key with value 1 if key doesn't exist
+- Converts string numbers to integers
+- Returns new value after increment
+
+EXAMPLES:
+redis-clone> SET counter "10"
+OK
+redis-clone> INCR counter
+(integer) 11
+redis-clone> INCR newcounter
+(integer) 1
+
+ERROR CONDITIONS:
+- Non-numeric string: "(error) ERR value is not an integer or out of range"
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+- Missing key: "ERR wrong number of arguments for 'incr' command"
+
+IMPLEMENTATION DETAILS:
+- Write lock on database
+- Type checking and conversion
+- Atomic increment operation
+- Handles both Integer and String types
+
+---
+
+DECR key
+--------
+PURPOSE: Decrement integer value stored at key by 1
+SYNTAX: DECR key
+ARGUMENTS:
+  - key (required): Key containing integer value
+
+BEHAVIOR:
+- Decrements integer value by 1
+- Creates key with value -1 if key doesn't exist
+- Converts string numbers to integers
+- Returns new value after decrement
+
+EXAMPLES:
+redis-clone> SET counter "10"
+OK
+redis-clone> DECR counter
+(integer) 9
+redis-clone> DECR newcounter
+(integer) -1
+
+ERROR CONDITIONS:
+- Same as INCR command
+
+IMPLEMENTATION DETAILS:
+- Similar to INCR but subtracts 1
+- Same type handling and error conditions
+
+================================================================================
+                             3. LIST COMMANDS
+================================================================================
+
+LPUSH key value [value ...]
+---------------------------
+PURPOSE: Insert values at the head (left) of list
+SYNTAX: LPUSH key value [value ...]
+ARGUMENTS:
+  - key (required): List key name
+  - value (required): One or more values to insert
+
+BEHAVIOR:
+- Inserts values at beginning of list
+- Creates new list if key doesn't exist
+- Multiple values inserted in reverse order
+- Returns length of list after operation
+
+EXAMPLES:
+redis-clone> LPUSH mylist "world"
+(integer) 1
+redis-clone> LPUSH mylist "hello" "hi"
+(integer) 3
+redis-clone> LRANGE mylist 0 -1
+[1: hi, 2: hello, 3: world]
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+- Missing arguments: "ERR wrong number of arguments for 'lpush' command"
+
+IMPLEMENTATION DETAILS:
+- Write lock on database
+- Uses VecDeque for efficient front insertion
+- Handles list creation automatically
+- Values inserted in reverse order for multiple values
+
+---
+
+RPUSH key value [value ...]
+---------------------------
+PURPOSE: Insert values at the tail (right) of list
+SYNTAX: RPUSH key value [value ...]
+ARGUMENTS:
+  - key (required): List key name
+  - value (required): One or more values to insert
+
+BEHAVIOR:
+- Inserts values at end of list
+- Creates new list if key doesn't exist
+- Multiple values inserted in order
+- Returns length of list after operation
+
+EXAMPLES:
+redis-clone> RPUSH mylist "first"
+(integer) 1
+redis-clone> RPUSH mylist "second" "third"
+(integer) 3
+
+ERROR CONDITIONS:
+- Same as LPUSH
+
+IMPLEMENTATION DETAILS:
+- Similar to LPUSH but appends to end
+- Maintains insertion order for multiple values
+
+---
+
+LPOP key
+--------
+PURPOSE: Remove and return first element from list
+SYNTAX: LPOP key
+ARGUMENTS:
+  - key (required): List key name
+
+BEHAVIOR:
+- Removes first element from list
+- Returns the removed element
+- Returns "(nil)" if list is empty or key doesn't exist
+- Removes key if list becomes empty
+
+EXAMPLES:
+redis-clone> LPUSH mylist "a" "b" "c"
+(integer) 3
+redis-clone> LPOP mylist
+"c"
+redis-clone> LPOP emptylist
+(nil)
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+- Missing key: "ERR wrong number of arguments for 'lpop' command"
+
+---
+
+RPOP key
+--------
+PURPOSE: Remove and return last element from list
+SYNTAX: RPOP key
+ARGUMENTS:
+  - key (required): List key name
+
+BEHAVIOR:
+- Removes last element from list
+- Returns the removed element
+- Returns "(nil)" if list is empty or key doesn't exist
+- Removes key if list becomes empty
+
+EXAMPLES:
+redis-clone> RPUSH mylist "a" "b" "c"
+(integer) 3
+redis-clone> RPOP mylist
+"c"
+
+ERROR CONDITIONS:
+- Same as LPOP
+
+---
+
+LLEN key
+--------
+PURPOSE: Get length of list
+SYNTAX: LLEN key
+ARGUMENTS:
+  - key (required): List key name
+
+BEHAVIOR:
+- Returns number of elements in list
+- Returns 0 if key doesn't exist
+- Type error if key is not a list
+
+EXAMPLES:
+redis-clone> LPUSH mylist "a" "b" "c"
+(integer) 3
+redis-clone> LLEN mylist
+(integer) 3
+redis-clone> LLEN nonexistent
+(integer) 0
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+
+---
+
+LRANGE key start stop
+--------------------
+PURPOSE: Get range of elements from list
+SYNTAX: LRANGE key start stop
+ARGUMENTS:
+  - key (required): List key name
+  - start (required): Start index (0-based)
+  - stop (required): Stop index (inclusive)
+
+BEHAVIOR:
+- Returns elements from start to stop (inclusive)
+- Supports negative indices (-1 = last element)
+- Returns empty array if range is invalid
+- Returns empty array if key doesn't exist
+
+EXAMPLES:
+redis-clone> RPUSH mylist "a" "b" "c" "d"
+(integer) 4
+redis-clone> LRANGE mylist 0 2
+[1: a, 2: b, 3: c]
+redis-clone> LRANGE mylist -2 -1
+[1: c, 2: d]
+redis-clone> LRANGE mylist 0 -1
+[1: a, 2: b, 3: c, 4: d]
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+- Invalid arguments: "ERR wrong number of arguments for 'lrange' command"
+
+IMPLEMENTATION DETAILS:
+- Complex index calculation for negative indices
+- Bounds checking and validation
+- Slice operation on underlying Vec
+
+================================================================================
+                             4. SET COMMANDS
+================================================================================
+
+SADD key member [member ...]
+----------------------------
+PURPOSE: Add members to set
+SYNTAX: SADD key member [member ...]
+ARGUMENTS:
+  - key (required): Set key name
+  - member (required): One or more members to add
+
+BEHAVIOR:
+- Adds members to set (duplicates ignored)
+- Creates new set if key doesn't exist
+- Returns number of new members added
+- Set maintains uniqueness automatically
+
+EXAMPLES:
+redis-clone> SADD myset "apple"
+(integer) 1
+redis-clone> SADD myset "banana" "apple" "cherry"
+(integer) 2
+redis-clone> SMEMBERS myset
+[apple, banana, cherry]
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+- Missing arguments: "ERR wrong number of arguments for 'sadd' command"
+
+IMPLEMENTATION DETAILS:
+- Uses HashSet for O(1) operations
+- Automatic duplicate handling
+- Returns count of actually added members
+
+---
+
+SMEMBERS key
+-----------
+PURPOSE: Get all members of set
+SYNTAX: SMEMBERS key
+ARGUMENTS:
+  - key (required): Set key name
+
+BEHAVIOR:
+- Returns all members in set
+- Returns empty array if set is empty or key doesn't exist
+- Order is not guaranteed (set property)
+
+EXAMPLES:
+redis-clone> SADD myset "a" "b" "c"
+(integer) 3
+redis-clone> SMEMBERS myset
+[a, b, c]
+redis-clone> SMEMBERS emptyset
+[]
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+
+---
+
+SCARD key
+---------
+PURPOSE: Get cardinality (size) of set
+SYNTAX: SCARD key
+ARGUMENTS:
+  - key (required): Set key name
+
+BEHAVIOR:
+- Returns number of members in set
+- Returns 0 if set is empty or key doesn't exist
+
+EXAMPLES:
+redis-clone> SADD myset "a" "b" "c"
+(integer) 3
+redis-clone> SCARD myset
+(integer) 3
+
+---
+
+SISMEMBER key member
+-------------------
+PURPOSE: Test if member exists in set
+SYNTAX: SISMEMBER key member
+ARGUMENTS:
+  - key (required): Set key name
+  - member (required): Member to test
+
+BEHAVIOR:
+- Returns 1 if member exists in set
+- Returns 0 if member doesn't exist or key doesn't exist
+
+EXAMPLES:
+redis-clone> SADD myset "apple" "banana"
+(integer) 2
+redis-clone> SISMEMBER myset "apple"
+(integer) 1
+redis-clone> SISMEMBER myset "cherry"
+(integer) 0
+
+================================================================================
+                             5. HASH COMMANDS
+================================================================================
+
+HSET key field value
+-------------------
+PURPOSE: Set field in hash to value
+SYNTAX: HSET key field value
+ARGUMENTS:
+  - key (required): Hash key name
+  - field (required): Field name within hash
+  - value (required): Value to set
+
+BEHAVIOR:
+- Sets field to value in hash
+- Creates hash if key doesn't exist
+- Overwrites existing field value
+- Returns 1 if new field, 0 if updated existing
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John"
+(integer) 1
+redis-clone> HSET user:1 age "30"
+(integer) 1
+redis-clone> HSET user:1 name "Jane"
+(integer) 0
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+- Wrong arguments: "ERR wrong number of arguments for 'hset' command"
+
+IMPLEMENTATION DETAILS:
+- Uses HashMap for O(1) field access
+- Automatic hash creation
+- Returns whether field was new or updated
+
+---
+
+HGET key field
+-------------
+PURPOSE: Get value of field in hash
+SYNTAX: HGET key field
+ARGUMENTS:
+  - key (required): Hash key name
+  - field (required): Field name to retrieve
+
+BEHAVIOR:
+- Returns value of field in hash
+- Returns "(nil)" if field or key doesn't exist
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John"
+(integer) 1
+redis-clone> HGET user:1 name
+"John"
+redis-clone> HGET user:1 nonexistent
+(nil)
+
+ERROR CONDITIONS:
+- Wrong type: "(error) WRONGTYPE Operation against a key holding the wrong kind of value"
+
+---
+
+HGETALL key
+----------
+PURPOSE: Get all fields and values in hash
+SYNTAX: HGETALL key
+ARGUMENTS:
+  - key (required): Hash key name
+
+BEHAVIOR:
+- Returns all field-value pairs in hash
+- Returns empty array if hash is empty or key doesn't exist
+- Fields and values are interleaved in response
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John" age "30"
+redis-clone> HGETALL user:1
+[1: name, 2: John, 3: age, 4: 30]
+
+---
+
+HDEL key field [field ...]
+--------------------------
+PURPOSE: Delete fields from hash
+SYNTAX: HDEL key field [field ...]
+ARGUMENTS:
+  - key (required): Hash key name
+  - field (required): One or more fields to delete
+
+BEHAVIOR:
+- Removes specified fields from hash
+- Returns number of fields actually removed
+- Ignores non-existent fields
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John" age "30" city "NYC"
+redis-clone> HDEL user:1 age city
+(integer) 2
+redis-clone> HDEL user:1 nonexistent
+(integer) 0
+
+---
+
+HEXISTS key field
+----------------
+PURPOSE: Test if field exists in hash
+SYNTAX: HEXISTS key field
+ARGUMENTS:
+  - key (required): Hash key name
+  - field (required): Field name to test
+
+BEHAVIOR:
+- Returns 1 if field exists in hash
+- Returns 0 if field or key doesn't exist
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John"
+(integer) 1
+redis-clone> HEXISTS user:1 name
+(integer) 1
+redis-clone> HEXISTS user:1 age
+(integer) 0
+
+---
+
+HLEN key
+--------
+PURPOSE: Get number of fields in hash
+SYNTAX: HLEN key
+ARGUMENTS:
+  - key (required): Hash key name
+
+BEHAVIOR:
+- Returns number of fields in hash
+- Returns 0 if hash is empty or key doesn't exist
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John" age "30"
+redis-clone> HLEN user:1
+(integer) 2
+
+---
+
+HKEYS key
+---------
+PURPOSE: Get all field names in hash
+SYNTAX: HKEYS key
+ARGUMENTS:
+  - key (required): Hash key name
+
+BEHAVIOR:
+- Returns all field names in hash
+- Returns empty array if hash is empty or key doesn't exist
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John" age "30"
+redis-clone> HKEYS user:1
+[1: name, 2: age]
+
+---
+
+HVALS key
+---------
+PURPOSE: Get all values in hash
+SYNTAX: HVALS key
+ARGUMENTS:
+  - key (required): Hash key name
+
+BEHAVIOR:
+- Returns all values in hash
+- Returns empty array if hash is empty or key doesn't exist
+
+EXAMPLES:
+redis-clone> HSET user:1 name "John" age "30"
+redis-clone> HVALS user:1
+[1: John, 2: 30]
+
+================================================================================
+                         6. KEY MANAGEMENT COMMANDS
+================================================================================
+
+DEL key [key ...]
+-----------------
+PURPOSE: Delete one or more keys
+SYNTAX: DEL key [key ...]
+ARGUMENTS:
+  - key (required): One or more keys to delete
+
+BEHAVIOR:
+- Deletes specified keys regardless of type
+- Returns number of keys actually deleted
+- Ignores non-existent keys
+- Removes associated TTL information
+
+EXAMPLES:
+redis-clone> SET key1 "value1"
+OK
+redis-clone> SET key2 "value2"
+OK
+redis-clone> DEL key1 key2 nonexistent
+(integer) 2
+
+ERROR CONDITIONS:
+- Missing arguments: "ERR wrong number of arguments for 'del' command"
+
+IMPLEMENTATION DETAILS:
+- Removes from both data and expires HashMaps
+- Atomic operation per key
+- Returns actual deletion count
+
+---
+
+EXISTS key [key ...]
+-------------------
+PURPOSE: Test if keys exist
+SYNTAX: EXISTS key [key ...]
+ARGUMENTS:
+  - key (required): One or more keys to test
+
+BEHAVIOR:
+- Returns count of existing keys
+- Each existing key contributes 1 to count
+- Non-existent keys contribute 0
+
+EXAMPLES:
+redis-clone> SET key1 "value1"
+OK
+redis-clone> EXISTS key1 key2 key1
+(integer) 2
+
+ERROR CONDITIONS:
+- Missing arguments: "ERR wrong number of arguments for 'exists' command"
+
+---
+
+KEYS pattern
+-----------
+PURPOSE: Find keys matching pattern
+SYNTAX: KEYS pattern
+ARGUMENTS:
+  - pattern (optional): Glob pattern (defaults to "*")
+
+BEHAVIOR:
+- Returns all keys matching pattern
+- Supports glob patterns (* and ?)
+- Returns empty array if no matches
+- Pattern defaults to "*" (all keys)
+
+EXAMPLES:
+redis-clone> SET user:1 "John"
+OK
+redis-clone> SET user:2 "Jane"
+OK
+redis-clone> SET session:123 "data"
+OK
+redis-clone> KEYS user:*
+[1: user:1, 2: user:2]
+redis-clone> KEYS *
+[1: user:1, 2: user:2, 3: session:123]
+
+PERFORMANCE WARNING:
+- O(N) operation where N is number of keys
+- Should not be used in production with large datasets
+- Blocks server during execution
+
+---
+
+TYPE key
+--------
+PURPOSE: Get type of value stored at key
+SYNTAX: TYPE key
+ARGUMENTS:
+  - key (required): Key to check type
+
+BEHAVIOR:
+- Returns string indicating value type
+- Possible return values: "string", "list", "set", "hash", "none"
+- Returns "none" if key doesn't exist
+
+EXAMPLES:
+redis-clone> SET mystring "value"
+OK
+redis-clone> LPUSH mylist "item"
+(integer) 1
+redis-clone> TYPE mystring
+string
+redis-clone> TYPE mylist
+list
+redis-clone> TYPE nonexistent
+none
+
+================================================================================
+                        7. TTL & EXPIRATION COMMANDS
+================================================================================
+
+EXPIRE key seconds
+-----------------
+PURPOSE: Set expiration time for key in seconds
+SYNTAX: EXPIRE key seconds
+ARGUMENTS:
+  - key (required): Key to set expiration
+  - seconds (required): Expiration time in seconds
+
+BEHAVIOR:
+- Sets key to expire after specified seconds
+- Returns 1 if expiration was set
+- Returns 0 if key doesn't exist
+- Overwrites existing expiration
+
+EXAMPLES:
+redis-clone> SET session:123 "data"
+OK
+redis-clone> EXPIRE session:123 3600
+(integer) 1
+redis-clone> EXPIRE nonexistent 60
+(integer) 0
+
+ERROR CONDITIONS:
+- Invalid time: "ERR invalid expire time"
+- Wrong arguments: "ERR wrong number of arguments for 'expire' command"
+
+IMPLEMENTATION DETAILS:
+- Stores expiration as Instant in expires HashMap
+- Background cleanup during operations
+- Precise timing using system clock
+
+---
+
+TTL key
+-------
+PURPOSE: Get remaining time to live for key in seconds
+SYNTAX: TTL key
+ARGUMENTS:
+  - key (required): Key to check TTL
+
+BEHAVIOR:
+- Returns remaining seconds until expiration
+- Returns -1 if key exists but has no expiration
+- Returns -2 if key doesn't exist
+- Returns 0 or positive integer for remaining time
+
+EXAMPLES:
+redis-clone> SET mykey "value"
+OK
+redis-clone> EXPIRE mykey 100
+(integer) 1
+redis-clone> TTL mykey
+(integer) 97
+redis-clone> TTL persistent_key
+(integer) -1
+redis-clone> TTL nonexistent
+(integer) -2
+
+IMPLEMENTATION DETAILS:
+- Calculates difference between current time and expiration
+- Handles expired keys by returning -2
+- Precise calculation using Instant arithmetic
+
+---
+
+PEXPIRE key milliseconds
+-----------------------
+PURPOSE: Set expiration time for key in milliseconds
+SYNTAX: PEXPIRE key milliseconds
+ARGUMENTS:
+  - key (required): Key to set expiration
+  - milliseconds (required): Expiration time in milliseconds
+
+BEHAVIOR:
+- Similar to EXPIRE but with millisecond precision
+- More precise timing control
+- Same return values as EXPIRE
+
+EXAMPLES:
+redis-clone> SET mykey "value"
+OK
+redis-clone> PEXPIRE mykey 5000
+(integer) 1
+
+---
+
+PTTL key
+--------
+PURPOSE: Get remaining time to live for key in milliseconds
+SYNTAX: PTTL key
+ARGUMENTS:
+  - key (required): Key to check TTL
+
+BEHAVIOR:
+- Similar to TTL but returns milliseconds
+- Higher precision timing information
+- Same return value semantics as TTL
+
+EXAMPLES:
+redis-clone> PEXPIRE mykey 5000
+(integer) 1
+redis-clone> PTTL mykey
+(integer) 4823
+
+================================================================================
+                       8. SERVER INFORMATION COMMANDS
+================================================================================
+
+INFO
+----
+PURPOSE: Get server information and statistics
+SYNTAX: INFO
+ARGUMENTS: None
+
+BEHAVIOR:
+- Returns comprehensive server information
+- Includes memory usage, key count, version info
+- Formatted as key:value pairs grouped by sections
+
+EXAMPLE OUTPUT:
+redis-clone> INFO
+"# Server
+redis_version:7.0.0-clone
+redis_mode:standalone
+# Memory
+used_memory:2048
+used_memory_human:2.00KB
+used_memory_peak:2048
+# Keyspace
+db0:keys=5,expires=2"
+
+SECTIONS INCLUDED:
+- Server: Version and mode information
+- Memory: Memory usage statistics
+- Keyspace: Database statistics
+
+---
+
+MEMORY
+------
+PURPOSE: Get detailed memory usage information
+SYNTAX: MEMORY
+ARGUMENTS: None
+
+BEHAVIOR:
+- Returns memory usage in bytes and human-readable format
+- Calculates actual memory consumption
+- Includes overhead calculations
+
+EXAMPLE OUTPUT:
+redis-clone> MEMORY
+used_memory:2048
+used_memory_human:2.00KB
+
+CALCULATION INCLUDES:
+- Key string lengths
+- Value sizes by type
+- Data structure overhead
+- TTL storage overhead
+- Base system overhead
+
+MEMORY CALCULATION DETAILS:
+- Strings: Actual string length
+- Integers: 8 bytes (i64 size)
+- Lists: Sum of item lengths + Vec overhead
+- Sets: Sum of item lengths + HashSet overhead
+- Hashes: Sum of key+value lengths + HashMap overhead
+- Expires: String + Instant size per entry
+- Base overhead: 1024 bytes
+
+---
+
+DBSIZE
+------
+PURPOSE: Get number of keys in database
+SYNTAX: DBSIZE
+ARGUMENTS: None
+
+BEHAVIOR:
+- Returns total number of keys in database
+- Counts all key types
+- Does not count expired keys
+
+EXAMPLES:
+redis-clone> SET key1 "value1"
+OK
+redis-clone> LPUSH key2 "item"
+(integer) 1
+redis-clone> DBSIZE
+(integer) 2
+
+---
+
+FLUSHALL
+--------
+PURPOSE: Delete all keys from database
+SYNTAX: FLUSHALL
+ARGUMENTS: None
+
+BEHAVIOR:
+- Removes all keys and their values
+- Clears all TTL information
+- Resets database to empty state
+- Returns "OK" on completion
+
+EXAMPLES:
+redis-clone> SET key1 "value1"
+OK
+redis-clone> SET key2 "value2"
+OK
+redis-clone> FLUSHALL
+OK
+redis-clone> DBSIZE
+(integer) 0
+
+WARNING:
+- Destructive operation
+- Cannot be undone
+- Affects all data types
+- Clears persistence data on next save
+
+================================================================================
+                            COMMAND IMPLEMENTATION NOTES
+================================================================================
+
+THREAD SAFETY
+==============
+- All commands use Arc<RwLock<RedisDatabase>> for thread safety
+- Read operations acquire read locks
+- Write operations acquire write locks
+- Multiple readers can execute concurrently
+- Writers have exclusive access
+
+ERROR HANDLING
+==============
+- Redis-compatible error messages
+- Consistent error format: "(error) ERR message"
+- Type checking for all operations
+- Argument validation before execution
+- Graceful handling of edge cases
+
+MEMORY MANAGEMENT
+=================
+- Automatic cleanup of expired keys during operations
+- Efficient data structures (HashMap, HashSet, VecDeque)
+- Memory usage tracking and reporting
+- No memory leaks due to Rust's ownership system
+
+PERSISTENCE INTEGRATION
+=======================
+- All write operations affect persistent state
+- Background saves preserve all data types
+- TTL information persisted and restored
+- Atomic operations ensure consistency
+
+PERFORMANCE CHARACTERISTICS
+===========================
+- Most operations are O(1) average case
+- KEYS command is O(N) - use with caution
+- List operations are O(1) at ends, O(N) for middle
+- Set operations are O(1) average case
+- Hash operations are O(1) average case
+
+REDIS COMPATIBILITY
+===================
+- Command syntax matches Redis exactly
+- Error messages match Redis format
+- Return value formats compatible
+- Behavior matches Redis semantics
+- TTL handling identical to Redis
+
+================================================================================
+                                END OF DOCUMENTATION
+================================================================================
