@@ -310,6 +310,8 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
         },
         
         
+        
+        
         Command::Quit => "OK".to_string(),
 
         _ => "(error) ERR unknown command".to_string(),

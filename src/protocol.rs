@@ -228,6 +228,10 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
             Ok(Command::Memory)
         },
 
+        "SHOWALL" => {
+            Ok(Command::ShowAll)
+        },
+
         "QUIT" => {
             Ok(Command::Quit)
         },

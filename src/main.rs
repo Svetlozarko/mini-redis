@@ -5,6 +5,7 @@ mod data_types;
 mod server;
 mod auth;
 mod persistence;
+mod persistence_clean;
 
 use clap::Parser;
 use server::Server;
