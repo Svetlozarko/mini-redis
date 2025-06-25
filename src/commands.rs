@@ -54,6 +54,7 @@ pub enum Command {
     Info,
     Memory,  // <-- Added this line
     Quit,
+    ShowAll,
 }
 
 pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientAuth) -> String {
@@ -239,7 +240,76 @@ pub fn execute_command(db: Database, command: Command, client_auth: &mut ClientA
             // This should not be reached due to early return above
             "OK".to_string()
         },
+        Command::ShowAll => {
+            let db = db.read().unwrap();
+            if db.data.is_empty() {
+                return "(empty database)".to_string();
+            }
 
+            let mut result = String::new();
+            result.push_str(&format!("=== DATABASE CONTENTS ({} keys) ===\n", db.data.len()));
+
+            for (key, value) in &db.data {
+                // Check if key has TTL
+                let ttl_info = if let Some(expire_time) = db.expires.get(key) {
+                    let now = std::time::Instant::now();
+                    if *expire_time > now {
+                        let remaining = (*expire_time - now).as_secs();
+                        format!(" (TTL: {}s)", remaining)
+                    } else {
+                        " (EXPIRED)".to_string()
+                    }
+                } else {
+                    "".to_string()
+                };
+
+                match value {
+                    RedisValue::String(s) => {
+                        result.push_str(&format!("\"{}\" -> STRING: \"{}\"{}\n", key, s, ttl_info));
+                    },
+                    RedisValue::Integer(i) => {
+                        result.push_str(&format!("\"{}\" -> INTEGER: {}{}\n", key, i, ttl_info));
+                    },
+                    RedisValue::List(list) => {
+                        result.push_str(&format!("\"{}\" -> LIST ({} items): [{}]{}\n",
+                                                 key,
+                                                 list.len(),
+                                                 list.iter().map(|item| format!("\"{}\"", item)).collect::<Vec<_>>().join(", "),
+                                                 ttl_info
+                        ));
+                    },
+                    RedisValue::Set(set) => {
+                        let mut items: Vec<_> = set.iter().collect();
+                        items.sort(); // Sort for consistent output
+                        result.push_str(&format!("\"{}\" -> SET ({} items): {{{}}}{}\n",
+                                                 key,
+                                                 set.len(),
+                                                 items.iter().map(|item| format!("\"{}\"", item)).collect::<Vec<_>>().join(", "),
+                                                 ttl_info
+                        ));
+                    },
+                    RedisValue::Hash(hash) => {
+                        let mut fields: Vec<_> = hash.iter().collect();
+                        fields.sort_by_key(|(k, _)| *k); // Sort by field name
+                        let hash_content = fields.iter()
+                            .map(|(field, val)| format!("\"{}\" => \"{}\"", field, val))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        result.push_str(&format!("\"{}\" -> HASH ({} fields): {{{}}}{}\n",
+                                                 key,
+                                                 hash.len(),
+                                                 hash_content,
+                                                 ttl_info
+                        ));
+                    },
+                }
+            }
+
+            result.push_str("=== END OF DATABASE ===");
+            result
+        },
+        
+        
         Command::Quit => "OK".to_string(),
 
         _ => "(error) ERR unknown command".to_string(),
@@ -292,3 +362,4 @@ fn format_bytes(bytes: usize) -> String {
         format!("{:.2}{}", size, UNITS[unit_index])
     }
 }
+
