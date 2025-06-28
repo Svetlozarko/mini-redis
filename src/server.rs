@@ -1,5 +1,5 @@
 use crate::commands::execute_command;
-use crate::database::{create_database, create_database_with_data, Database};
+use crate::database::{create_database_with_memory_config, create_database_with_data, Database};
 use crate::protocol::parse_command;
 use crate::auth::{AuthConfig, ClientAuth};
 use crate::persistence::MmapPersistence;
@@ -17,16 +17,27 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(host: String, port: u16, password: Option<String>, dbfilename: String) -> Self {
+    pub fn new(
+        host: String,
+        port: u16,
+        password: Option<String>,
+        dbfilename: String,
+        max_memory: Option<usize>,
+        eviction_policy: String
+    ) -> Self {
         let auth_config = Arc::new(AuthConfig::new(password));
         let persistence = MmapPersistence::new(dbfilename);
 
         // Try to load existing database
         let database = match persistence.load_database() {
-            Ok(db) => create_database_with_data(db),
+            Ok(mut db) => {
+                // Update memory configuration for loaded database
+                db.memory_manager = crate::memory::MemoryManager::new(max_memory, eviction_policy);
+                create_database_with_data(db)
+            },
             Err(e) => {
                 eprintln!("Failed to load database: {}", e);
-                create_database()
+                create_database_with_memory_config(max_memory, eviction_policy)
             }
         };
 
@@ -44,6 +55,20 @@ impl Server {
         let listener = TcpListener::bind(&addr).await?;
 
         println!("Redis-clone server listening on {}", addr);
+
+        // Print memory configuration
+        {
+            let db = self.database.read().unwrap();
+            let memory_info = db.get_memory_info();
+            if let Some(max_mem) = memory_info.get("maxmemory_human") {
+                if max_mem != "unlimited" {
+                    println!("Memory limit: {}", max_mem);
+                    println!("Eviction policy: {}", memory_info.get("maxmemory_policy").unwrap_or(&"unknown".to_string()));
+                }
+            }
+            println!("Current memory usage: {}", memory_info.get("used_memory_human").unwrap_or(&"unknown".to_string()));
+        }
+
         println!("Ready to accept connections");
 
         // Start background save task
@@ -87,8 +112,23 @@ async fn handle_client(
     let mut line = String::new();
     let mut client_auth = ClientAuth::new(auth_config);
 
-    // Send welcome message
+    // Send welcome message with memory info
     writer.write_all(b"Welcome to Redis-clone!\r\n").await?;
+
+    {
+        let db = database.read().unwrap();
+        let memory_info = db.get_memory_info();
+        if let Some(max_mem) = memory_info.get("maxmemory_human") {
+            if max_mem != "unlimited" {
+                let usage = memory_info.get("used_memory_percentage").unwrap_or(&"0%".to_string());
+                writer.write_all(format!("Memory: {} used of {} ({})\r\n",
+                                         memory_info.get("used_memory_human").unwrap_or(&"0B".to_string()),
+                                         max_mem,
+                                         usage
+                ).as_bytes()).await?;
+            }
+        }
+    }
 
     if client_auth.requires_auth() {
         writer.write_all(b"Authentication required. Use AUTH <password>\r\n").await?;
