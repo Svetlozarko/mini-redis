@@ -1,10 +1,6 @@
-# 🚀 Redis-Clone: A High-Performance Redis Implementation in Rust
+#Redis Implementation in Rust
 
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 
-A blazingly fast, Redis-compatible database server written in Rust. Built for performance, reliability, and ease of use with full support for Redis commands, data persistence, and concurrent client connections.
 
 ## ✨ Features
 
