@@ -92,12 +92,10 @@ impl Server {
 
             println!("New client connected: {}", addr);
 
-            tokio::spawn(async move {
-                if let Err(e) = handle_client(socket, db, auth_config).await {
-                    eprintln!("Error handling client {}: {}", addr, e);
-                }
-                println!("Client {} disconnected", addr);
+            tokio::task::spawn_local(async move {
+                handle_client(socket, db, auth_config).await.unwrap();
             });
+
         }
     }
 }
@@ -120,7 +118,11 @@ async fn handle_client(
         let memory_info = db.get_memory_info();
         if let Some(max_mem) = memory_info.get("maxmemory_human") {
             if max_mem != "unlimited" {
-                let usage = memory_info.get("used_memory_percentage").unwrap_or(&"0%".to_string());
+                let usage = memory_info
+                    .get("used_memory_percentage")
+                    .cloned()
+                    .unwrap_or("0%".to_string());
+        
                 writer.write_all(format!("Memory: {} used of {} ({})\r\n",
                                          memory_info.get("used_memory_human").unwrap_or(&"0B".to_string()),
                                          max_mem,
