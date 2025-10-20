@@ -7,19 +7,18 @@ mod auth;
 mod persistence;
 mod persistence_clean;
 mod memory;
-mod memory;
 
 use clap::Parser;
 use server::Server;
 
 #[derive(Parser)]
-#[command(name = "redis-clone")]
+#[command(name = "untitled5")]
 #[command(about = "A Redis-like database implementation in Rust")]
 struct Args {
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
-    #[arg(short, long, default_value = "6379")]
+    #[arg(short, long, default_value = "6380")]
     port: u16,
 
     #[arg(long)]
