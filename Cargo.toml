@@ -3,9 +3,28 @@ name = "rust_redis"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "rust_redis"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rust_redis"
+path = "src/main.rs"
+
 [dependencies]
-tokio = { version = "1.0", features = ["full"] }
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rand = "0.10.0-rc.0"
+rand = "0.8"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "basic_operations"
+harness = false
+
+[[bench]]
+name = "network_operations"
+harness = false
