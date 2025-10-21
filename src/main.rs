@@ -9,10 +9,9 @@ mod persistence_clean;
 mod memory;
 
 use clap::Parser;
-use server::Server;
-
+use rust_redis::server::Server;
 #[derive(Parser)]
-#[command(name = "untitled5")]
+#[command(name = "rust_redis")]
 #[command(about = "A Redis-like database implementation in Rust")]
 struct Args {
     #[arg(long, default_value = "127.0.0.1")]
