@@ -1,7 +1,8 @@
 use crate::data_types::RedisValue;
 use crate::memory::MemoryManager;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use std::time::{Duration, Instant};
 
 pub type Database = Arc<RwLock<RedisDatabase>>;
@@ -53,7 +54,7 @@ impl RedisDatabase {
     pub fn set(&mut self, key: String, value: RedisValue) -> Result<(), String> {
         // Check memory limit before setting
         let memory_manager = &mut self.memory_manager;
-      //  memory_manager.check_memory_limit(self)?;
+        //  memory_manager.check_memory_limit(self)?;
 
         self.data.insert(key.clone(), value);
         self.memory_manager.track_access(&key);
@@ -63,7 +64,7 @@ impl RedisDatabase {
     pub fn set_with_expiry(&mut self, key: String, value: RedisValue, ttl: Duration) -> Result<(), String> {
         // Check memory limit before setting
         let memory_manager = &mut self.memory_manager;
-      //  memory_manager.check_memory_limit(self)?;
+        //  memory_manager.check_memory_limit(self)?;
 
         self.data.insert(key.clone(), value);
         self.expires.insert(key.clone(), Instant::now() + ttl);

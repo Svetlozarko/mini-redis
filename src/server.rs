@@ -58,7 +58,7 @@ impl Server {
 
         // Print memory configuration
         {
-            let db = self.database.read().unwrap();
+            let db = self.database.read().await;
             let memory_info = db.get_memory_info();
             if let Some(max_mem) = memory_info.get("maxmemory_human") {
                 if max_mem != "unlimited" {
@@ -78,7 +78,7 @@ impl Server {
             let mut interval = interval(Duration::from_secs(60)); // Save every minute
             loop {
                 interval.tick().await;
-                let db = db_clone.read().unwrap();
+                let db = db_clone.read().await;
                 if let Err(e) = persistence_clone.save_database(&db) {
                     eprintln!("Background save failed: {}", e);
                 }
@@ -92,10 +92,11 @@ impl Server {
 
             println!("New client connected: {}", addr);
 
-            tokio::task::spawn_local(async move {
-                handle_client(socket, db, auth_config).await.unwrap();
+            tokio::spawn(async move {
+                if let Err(e) = handle_client(socket, db, auth_config).await {
+                    eprintln!("Error handling client: {}", e);
+                }
             });
-
         }
     }
 }
@@ -114,7 +115,7 @@ async fn handle_client(
     writer.write_all(b"Welcome to Redis-clone!\r\n").await?;
 
     {
-        let db = database.read().unwrap();
+        let db = database.read().await;
         let memory_info = db.get_memory_info();
         if let Some(max_mem) = memory_info.get("maxmemory_human") {
             if max_mem != "unlimited" {
@@ -122,7 +123,7 @@ async fn handle_client(
                     .get("used_memory_percentage")
                     .cloned()
                     .unwrap_or("0%".to_string());
-        
+
                 writer.write_all(format!("Memory: {} used of {} ({})\r\n",
                                          memory_info.get("used_memory_human").unwrap_or(&"0B".to_string()),
                                          max_mem,
@@ -156,7 +157,7 @@ async fn handle_client(
                 match parse_command(command_str) {
                     Ok(command) => {
                         let is_quit = matches!(command, crate::commands::Command::Quit);
-                        let response = execute_command(Arc::clone(&database), command, &mut client_auth);
+                        let response = execute_command(Arc::clone(&database), command, &mut client_auth).await;
 
                         writer.write_all(response.as_bytes()).await?;
                         writer.write_all(b"\r\n").await?;
