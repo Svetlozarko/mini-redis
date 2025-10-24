@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedData {
     data: HashMap<String, RedisValue>,
-    expires: HashMap<String, u64>, // Store as seconds since UNIX_EPOCH
+    expires: HashMap<String, u64>, 
 }
 
 pub struct MmapPersistence {
