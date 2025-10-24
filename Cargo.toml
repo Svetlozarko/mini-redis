@@ -22,7 +22,7 @@ rand = "0.8"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
-name = "basic_operations"
+name = "raw_performance"
 harness = false
 
 [[bench]]
