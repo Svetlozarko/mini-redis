@@ -4,7 +4,6 @@ pub mod protocol;
 pub mod data_types;
 pub mod server;
 pub mod auth;
-pub mod persistence;
 pub mod persistence_clean;
 pub mod memory;
 

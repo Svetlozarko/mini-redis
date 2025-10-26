@@ -4,7 +4,6 @@ mod protocol;
 mod data_types;
 mod server;
 mod auth;
-mod persistence;
 mod persistence_clean;
 mod memory;
 
