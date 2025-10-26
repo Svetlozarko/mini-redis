@@ -2,9 +2,9 @@ use crate::commands::execute_command;
 use crate::database::{create_database_with_memory_config, create_database_with_data, Database};
 use crate::protocol::parse_command;
 use crate::auth::{AuthConfig, ClientAuth};
-use crate::persistence::MmapPersistence;
+use crate::persistence_clean::MmapPersistence;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{interval, Duration};
 
@@ -56,7 +56,6 @@ impl Server {
 
         println!("Redis-clone server listening on {}", addr);
 
-        // Print memory configuration
         {
             let db = self.database.read().await;
             let memory_info = db.get_memory_info();
@@ -71,7 +70,6 @@ impl Server {
 
         println!("Ready to accept connections");
 
-        // Start background save task
         let db_clone = Arc::clone(&self.database);
         let persistence_clone = MmapPersistence::new(self.persistence.file_path.clone());
         tokio::spawn(async move {
@@ -100,6 +98,15 @@ impl Server {
         }
     }
 }
+fn extract_one_command(buffer: &[u8]) -> Option<(&[u8], &[u8])> {
+    if let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+        let command = &buffer[..pos];
+        let remaining = &buffer[pos + 1..];
+        Some((command, remaining))
+    } else {
+        None
+    }
+}
 
 async fn handle_client(
     mut socket: TcpStream,
@@ -108,12 +115,10 @@ async fn handle_client(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (reader, mut writer) = socket.split();
     let mut reader = BufReader::new(reader);
-    let mut line = String::new();
     let mut client_auth = ClientAuth::new(auth_config);
 
-    // Send welcome message with memory info
     writer.write_all(b"Welcome to Redis-clone!\r\n").await?;
-
+    
     {
         let db = database.read().await;
         let memory_info = db.get_memory_info();
@@ -124,60 +129,58 @@ async fn handle_client(
                     .cloned()
                     .unwrap_or("0%".to_string());
 
-                writer.write_all(format!("Memory: {} used of {} ({})\r\n",
-                                         memory_info.get("used_memory_human").unwrap_or(&"0B".to_string()),
-                                         max_mem,
-                                         usage
-                ).as_bytes()).await?;
+                writer
+                    .write_all(
+                        format!(
+                            "Memory: {} used of {} ({})\r\n",
+                            memory_info.get("used_memory_human").unwrap_or(&"0B".to_string()),
+                            max_mem,
+                            usage
+                        )
+                            .as_bytes(),
+                    )
+                    .await?;
             }
         }
     }
 
     if client_auth.requires_auth() {
-        writer.write_all(b"Authentication required. Use AUTH <password>\r\n").await?;
+        writer
+            .write_all(b"Authentication required. Use AUTH <password>\r\n")
+            .await?;
     }
 
     writer.write_all(b"redis-clone> ").await?;
     writer.flush().await?;
 
+    let mut buffer = Vec::new();
+    let mut start = 0;
+
     loop {
-        line.clear();
-
-        match reader.read_line(&mut line).await? {
-            0 => break, // Client disconnected
-            _ => {
-                let command_str = line.trim();
-
-                if command_str.is_empty() {
-                    writer.write_all(b"redis-clone> ").await?;
-                    writer.flush().await?;
-                    continue;
-                }
-
-                match parse_command(command_str) {
-                    Ok(command) => {
-                        let is_quit = matches!(command, crate::commands::Command::Quit);
-                        let response = execute_command(Arc::clone(&database), command, &mut client_auth).await;
-
-                        writer.write_all(response.as_bytes()).await?;
-                        writer.write_all(b"\r\n").await?;
-
-                        if is_quit {
-                            writer.flush().await?;
-                            break;
-                        }
-                    },
-                    Err(error) => {
-                        writer.write_all(error.as_bytes()).await?;
-                        writer.write_all(b"\r\n").await?;
-                    }
-                }
-
-                writer.write_all(b"redis-clone> ").await?;
-                writer.flush().await?;
-            }
+        let n = reader.read_buf(&mut buffer).await?;
+        if n == 0 {
+            break;
         }
+
+        while let Some(pos) = buffer[start..].iter().position(|&b| b == b'\n') {
+            let command_bytes = &buffer[start..start + pos];
+            let command_str = std::str::from_utf8(command_bytes)?.trim();
+            start += pos + 1; // move past the newline
+            let command = parse_command(command_str)?;
+            let response = execute_command(Arc::clone(&database), command, &mut client_auth).await;
+
+           
+            let response_json = serde_json::to_string(&response)?;
+            writer.write_all(response_json.as_bytes()).await?;
+            writer.write_all(b"\r\n").await?;
+        }
+        
+        buffer.drain(..start);
+        start = 0;
+
+        writer.flush().await?;
     }
 
     Ok(())
 }
+
