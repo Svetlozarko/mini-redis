@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use std::time::Duration;
+use tokio::time::{timeout, Duration};
 
 async fn create_connection() -> TcpStream {
     for attempt in 0..5 {
@@ -18,13 +18,24 @@ async fn create_connection() -> TcpStream {
 }
 
 
-async fn send_command(stream: &mut TcpStream, command: &str) -> String {
-    stream.write_all(command.as_bytes()).await.unwrap();
-    let mut buffer = vec![0u8; 1024];
-    let n = stream.read(&mut buffer).await.unwrap();
-    String::from_utf8_lossy(&buffer[..n]).to_string()
-}
+async fn send_command(stream: &mut TcpStream, command: &str) -> Result<String, Box<dyn std::error::Error>> {
 
+    timeout(Duration::from_secs(5), stream.write_all(command.as_bytes()))
+        .await??;
+
+    timeout(Duration::from_secs(5), stream.flush())
+        .await??;
+
+    let mut buffer = vec![0u8; 8192]; // Increased from 1024
+    let n = timeout(Duration::from_secs(5), stream.read(&mut buffer))
+        .await??;
+
+    if n == 0 {
+        return Err("Connection closed by server".into());
+    }
+
+    Ok(String::from_utf8_lossy(&buffer[..n]).to_string())
+}
 fn bench_network_set(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 

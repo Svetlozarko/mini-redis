@@ -17,7 +17,7 @@ impl MyDb {
     }
 }
 
-fn persistence_crash_bench(c: &mut Criterion) {
+fn persistence_crash_test(c: &mut Criterion) {
     let db_file = "db.json";
 
     c.bench_function("db_persistence_crash", |b| {
@@ -38,5 +38,5 @@ fn persistence_crash_bench(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, persistence_crash_bench);
-criterion_main!(benches);
+criterion_group!(tests, persistence_crash_test);
+criterion_main!(tests);
