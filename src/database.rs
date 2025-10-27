@@ -32,7 +32,6 @@ impl RedisDatabase {
     }
 
     pub fn get(&mut self, key: &str) -> Option<RedisValue> {
-        // Check if key has expired
         if let Some(expire_time) = self.expires.get(key) {
             if Instant::now() > *expire_time {
                 self.data.remove(key);
@@ -101,7 +100,6 @@ impl RedisDatabase {
     }
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut RedisValue> {
-        // Check if key has expired
         if let Some(expire_time) = self.expires.get(key) {
             if Instant::now() > *expire_time {
                 self.data.remove(key);
@@ -140,7 +138,7 @@ impl RedisDatabase {
                 Some(*expire_time - now)
             }
         } else if self.data.contains_key(key) {
-            Some(Duration::MAX) // Key exists but has no expiry
+            Some(Duration::MAX) 
         } else {
             None // Key doesn't exist
         }

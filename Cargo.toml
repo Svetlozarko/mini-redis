@@ -18,13 +18,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rand = "0.8"
 thiserror = "2.0.17"
+sha2 = "0.11.0-rc.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "raw_performance"
-harness = false
 
 [[bench]]
 name = "network_operations"

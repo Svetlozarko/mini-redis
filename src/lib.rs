@@ -6,6 +6,7 @@ pub mod server;
 pub mod auth;
 pub mod persistence_clean;
 pub mod memory;
+pub mod wal;
 
 // Re-export commonly used types for easier imports
 pub use database::{Database, RedisDatabase};

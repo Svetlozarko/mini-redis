@@ -61,21 +61,18 @@ impl MemoryManager {
     pub fn calculate_memory_usage(&self, db: &RedisDatabase) -> usize {
         let mut total_size = 0;
 
-        // Calculate size of data HashMap
         for (key, value) in &db.data {
             total_size += key.len(); // Key size
             total_size += self.calculate_value_size(value);
         }
 
-        // Calculate size of expires HashMap
         total_size += db.expires.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Instant>());
 
         // Add tracking overhead
         total_size += self.access_times.len() * (std::mem::size_of::<String>() + std::mem::size_of::<Instant>());
         total_size += self.access_counts.len() * (std::mem::size_of::<String>() + std::mem::size_of::<u64>());
 
-        // Add some overhead for the data structures themselves
-        total_size += 2048; // Base overhead
+        total_size += 2048; 
 
         total_size
     }
@@ -106,8 +103,7 @@ impl MemoryManager {
                         return Err(format!("OOM command not allowed when used memory > 'maxmemory'. Current: {} bytes, Max: {} bytes", current_usage, max_mem));
                     },
                     _ => {
-                        // Perform eviction
-                        let target_size = (max_mem as f64 * 0.9) as usize; // Evict to 90% of max
+                            let target_size = (max_mem as f64 * 0.9) as usize; // Evict to 90% of max
                         self.evict_keys(db, target_size)?;
                     }
                 }
