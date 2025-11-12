@@ -68,13 +68,10 @@ impl WriteAheadLog {
     }
 
     pub fn truncate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Close current writer
         self.writer = None;
 
-        // Truncate the file
         File::create(&self.file_path)?;
 
-        // Reopen for appending
         let file = OpenOptions::new()
             .create(true)
             .append(true)

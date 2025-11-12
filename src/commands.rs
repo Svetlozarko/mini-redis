@@ -2,8 +2,10 @@ use crate::data_types::RedisValue;
 use crate::database::{Database, RedisDatabase};
 use crate::auth::ClientAuth;
 use crate::persistence_clean::MmapPersistence;
+use crate::pub_sub::PubSubManager;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
+use clap::Error;
 
 #[derive(Debug, Clone)]
 pub enum MergeStrategy {
@@ -68,6 +70,16 @@ pub enum Command {
     Rename { key: String, newkey: String },
     RandomKey,
 
+    // Pub/Sub commands
+    Publish { channel: String, message: String },
+    Subscribe { channels: Vec<String> },
+    Unsubscribe { channels: Vec<String> },
+    PSubscribe { patterns: Vec<String> },
+    PUnsubscribe { patterns: Vec<String> },
+    PubSubChannels { pattern: Option<String> },
+    PubSubNumSub { channels: Vec<String> },
+    PubSubNumPat,
+
     // Connection commands
     Ping { message: Option<String> },
     Echo { message: String },
@@ -76,10 +88,17 @@ pub enum Command {
     Memory,
     ShowAll,
     Merge { file_path: String, strategy: MergeStrategy },
+    VerifyIntegrity,
+    RecoverFromBackup,
     Quit,
 }
 
-pub async fn execute_command(db: Database, command: Command, client_auth: &mut ClientAuth) -> String {
+pub async fn execute_command(
+    db: Database,
+    command: Command,
+    client_auth: &mut ClientAuth,
+    pubsub_manager: Option<&PubSubManager>
+) -> String {
     // Check authentication for all commands except AUTH
     if let Command::Auth { password } = &command {
         if client_auth.authenticate(password) {
@@ -102,6 +121,7 @@ pub async fn execute_command(db: Database, command: Command, client_auth: &mut C
                 Some(RedisValue::Integer(i)) => i.to_string(),
                 Some(_) => "(error) WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
                 None => "(nil)".to_string(),
+
             }
         },
 
@@ -816,7 +836,7 @@ pub async fn execute_command(db: Database, command: Command, client_auth: &mut C
         Command::Ttl { key } => {
             let mut db_write = db.write().await;
 
-            if !&db_write.exists(&key) {
+            if !db_write.exists(&key) {
                 return "(integer) -2".to_string();
             }
 
@@ -1080,17 +1100,81 @@ pub async fn execute_command(db: Database, command: Command, client_auth: &mut C
             "OK".to_string()
         },
 
-        Command::Ping { message } => {
-            match message {
-                Some(msg) => format!("\"{}\"", msg),
-                None => "PONG".to_string(),
+        Command::Publish { channel, message } => {
+            if let Some(pubsub) = pubsub_manager {
+                let pubsub_state = pubsub.read().await;
+                let count = pubsub_state.publish(&channel, message);
+                format!("(integer) {}", count)
+            } else {
+                "(error) ERR Pub/Sub not available".to_string()
             }
         },
 
-        Command::Auth { .. } => {
-            "OK".to_string()
+        Command::PubSubChannels { pattern } => {
+            if let Some(pubsub) = pubsub_manager {
+                let pubsub_state = pubsub.read().await;
+                let channels = pubsub_state.get_channels();
+
+                let filtered: Vec<String> = if let Some(pat) = pattern {
+                    channels.into_iter()
+                        .filter(|ch| ch.contains(&pat))
+                        .collect()
+                } else {
+                    channels
+                };
+
+                if filtered.is_empty() {
+                    "(empty array)".to_string()
+                } else {
+                    filtered.iter()
+                        .enumerate()
+                        .map(|(i, ch)| format!("{}) \"{}\"", i + 1, ch))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+            } else {
+                "(error) ERR Pub/Sub not available".to_string()
+            }
+        },
+
+        Command::PubSubNumSub { channels } => {
+            if let Some(pubsub) = pubsub_manager {
+                let pubsub_state = pubsub.read().await;
+                let mut result = Vec::new();
+
+                for channel in channels {
+                    let count = pubsub_state.get_channel_subscribers(&channel);
+                    result.push(format!("\"{}\"", channel));
+                    result.push(format!("(integer) {}", count));
+                }
+
+                if result.is_empty() {
+                    "(empty array)".to_string()
+                } else {
+                    result.iter()
+                        .enumerate()
+                        .map(|(i, item)| format!("{}) {}", i + 1, item))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+            } else {
+                "(error) ERR Pub/Sub not available".to_string()
+            }
+        },
+
+        Command::PubSubNumPat => {
+            if let Some(pubsub) = pubsub_manager {
+                let pubsub_state = pubsub.read().await;
+                format!("(integer) {}", pubsub_state.patterns.len())  // just access fields
+            } else {
+                "(error) ERR Pub/Sub not available".to_string()
+            }
+        },
+        Command::Subscribe { .. } | Command::Unsubscribe { .. } |
+        Command::PSubscribe { .. } | Command::PUnsubscribe { .. } => {
+            "(error) ERR only allowed in subscriber mode".to_string()
         },
 
         Command::Quit => "OK".to_string(),
-    }
+        _ => String::new()    }
 }

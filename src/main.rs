@@ -6,6 +6,7 @@ mod server;
 mod auth;
 mod persistence_clean;
 mod memory;
+mod pub_sub;
 
 use clap::Parser;
 use rust_redis::server::Server;
