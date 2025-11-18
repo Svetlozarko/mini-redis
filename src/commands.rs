@@ -130,6 +130,7 @@ pub async fn execute_command(
             db_write.set(key, RedisValue::String(value));
             "OK".to_string()
         },
+        Command::Ping { message} =>{"OK".to_string()}
 
         Command::SetEx { key, value, seconds } => {
             let mut db_write = db.write().await;
@@ -158,6 +159,8 @@ pub async fn execute_command(
             }
             format!("(integer) {}", count)
         },
+
+
 
         Command::Incr { key } => {
             let mut db_write = db.write().await;
