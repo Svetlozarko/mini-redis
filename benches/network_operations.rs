@@ -1,133 +1,134 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::{timeout, Duration};
 
-async fn create_connection() -> TcpStream {
-    for attempt in 0..5 {
-        match TcpStream::connect("127.0.0.1:6380").await {
-            Ok(stream) => return stream,
-            Err(e) if attempt < 4 => {
-                eprintln!("Connection attempt {} failed: {}. Retrying...", attempt + 1, e);
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-            Err(e) => panic!("Failed to connect to Redis server after 5 attempts: {}", e),
-        }
-    }
-    unreachable!()
+/// Read a full RESP reply (simple but correct for single-line or bulk replies)
+async fn read_resp(stream: &mut TcpStream) -> Vec<u8> {
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await.unwrap();
+    buf.truncate(n);
+    buf
 }
 
-
-async fn send_command(stream: &mut TcpStream, command: &str) -> Result<String, Box<dyn std::error::Error>> {
-
-    timeout(Duration::from_secs(5), stream.write_all(command.as_bytes()))
-        .await??;
-
-    timeout(Duration::from_secs(5), stream.flush())
-        .await??;
-
-    let mut buffer = vec![0u8; 8192]; // Increased from 1024
-    let n = timeout(Duration::from_secs(5), stream.read(&mut buffer))
-        .await??;
-
-    if n == 0 {
-        return Err("Connection closed by server".into());
-    }
-
-    Ok(String::from_utf8_lossy(&buffer[..n]).to_string())
+async fn send_resp(stream: &mut TcpStream, cmd: &str) {
+    stream.write_all(cmd.as_bytes()).await.unwrap();
+    let _ = read_resp(stream).await;
 }
-fn bench_network_set(c: &mut Criterion) {
+
+/// Establish a single reusable connection
+async fn new_conn() -> TcpStream {
+    TcpStream::connect("127.0.0.1:6380").await.unwrap()
+}
+
+//
+// ──────────────────────────────────────────────────────────────
+//   Single-operation benchmarks
+// ──────────────────────────────────────────────────────────────
+//
+
+fn bench_set(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut conn = rt.block_on(new_conn());
 
-    c.bench_function("network_set_small", |b| {
+    c.bench_function("SET_small", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let mut stream = create_connection().await;
-                let command = "*3\r\n$3\r\nSET\r\n$8\r\ntest_key\r\n$10\r\ntest_value\r\n";
-                let _ = black_box(send_command(&mut stream, command).await);
+                let cmd = "*3\r\n$3\r\nSET\r\n$8\r\ntest_key\r\n$10\r\ntest_value\r\n";
+                send_resp(&mut conn, cmd).await;
             })
         });
     });
 }
 
-fn bench_network_get(c: &mut Criterion) {
+fn bench_get(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut conn = rt.block_on(new_conn());
 
-    // Setup: Insert a key first
+    // setup
     rt.block_on(async {
-        let mut stream = create_connection().await;
-        let command = "*3\r\n$3\r\nSET\r\n$8\r\ntest_key\r\n$10\r\ntest_value\r\n";
-        send_command(&mut stream, command).await;
+        let cmd = "*3\r\n$3\r\nSET\r\n$8\r\ntest_key\r\n$10\r\ntest_value\r\n";
+        send_resp(&mut conn, cmd).await;
     });
 
-    c.bench_function("network_get_existing", |b| {
+    c.bench_function("GET_existing", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let mut stream = create_connection().await;
-                let command = "*2\r\n$3\r\nGET\r\n$8\r\ntest_key\r\n";
-                let _ = black_box(send_command(&mut stream, command).await);
+                let cmd = "*2\r\n$3\r\nGET\r\n$8\r\ntest_key\r\n";
+                send_resp(&mut conn, cmd).await;
             })
         });
     });
 }
 
-fn bench_network_delete(c: &mut Criterion) {
+fn bench_del(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut conn = rt.block_on(new_conn());
 
-    c.bench_function("network_delete", |b| {
+    c.bench_function("DEL_key", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let mut stream = create_connection().await;
-
-                // Setup: Insert key
                 let set_cmd = "*3\r\n$3\r\nSET\r\n$8\r\ntest_key\r\n$10\r\ntest_value\r\n";
-                send_command(&mut stream, set_cmd).await;
+                send_resp(&mut conn, set_cmd).await;
 
-                // Delete it
                 let del_cmd = "*2\r\n$3\r\nDEL\r\n$8\r\ntest_key\r\n";
-                let _ = black_box(send_command(&mut stream, del_cmd).await);
+                send_resp(&mut conn, del_cmd).await;
             })
         });
     });
 }
 
-fn bench_network_exists(c: &mut Criterion) {
+fn bench_exists(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut conn = rt.block_on(new_conn());
 
-    // Setup key
+    // Setup
     rt.block_on(async {
-        let mut stream = create_connection().await;
-        let command = "*3\r\n$3\r\nSET\r\n$8\r\ntest_key\r\n$10\r\ntest_value\r\n";
-        send_command(&mut stream, command).await;
+        let cmd = "*3\r\n$3\r\nSET\r\n$8\r\ntest_key\r\n$10\r\ntest_value\r\n";
+        send_resp(&mut conn, cmd).await;
     });
 
-    c.bench_function("network_exists", |b| {
+    c.bench_function("EXISTS_key", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let mut stream = create_connection().await;
-                let command = "*2\r\n$6\r\nEXISTS\r\n$8\r\ntest_key\r\n";
-                let _ = black_box(send_command(&mut stream, command).await);
+                let cmd = "*2\r\n$6\r\nEXISTS\r\n$8\r\ntest_key\r\n";
+                send_resp(&mut conn, cmd).await;
             })
         });
     });
 }
 
-fn bench_network_bulk_operations(c: &mut Criterion) {
+//
+// ──────────────────────────────────────────────────────────────
+//   BULK / PIPELINED BENCHMARKS (Correct Redis-style)
+// ──────────────────────────────────────────────────────────────
+//
+
+fn bench_bulk_set(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let mut group = c.benchmark_group("network_bulk_set");
+    let mut group = c.benchmark_group("BULK_SET");
 
     for size in [10, 100, 1000].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+            let mut conn = rt.block_on(new_conn());
+
             b.iter(|| {
                 rt.block_on(async {
-                    let mut stream = create_connection().await;
+                    // Pipeline N SET commands at once
+                    let mut batch = String::with_capacity(size * 50);
                     for i in 0..size {
-                        let command = format!(
+                        batch.push_str(&format!(
                             "*3\r\n$3\r\nSET\r\n${}\r\nkey_{}\r\n${}\r\nvalue_{}\r\n",
-                            5 + i.to_string().len(), i,
-                            7 + i.to_string().len(), i
-                        );
-                        let _ = black_box(send_command(&mut stream, &command).await);
+                            4 + i.to_string().len(), i,
+                            6 + i.to_string().len(), i
+                        ));
+                    }
+
+                    // Write everything at once → real Redis-style bulk test
+                    conn.write_all(batch.as_bytes()).await.unwrap();
+
+                    // Read all responses
+                    for _ in 0..size {
+                        let _ = read_resp(&mut conn).await;
                     }
                 })
             });
@@ -137,12 +138,18 @@ fn bench_network_bulk_operations(c: &mut Criterion) {
     group.finish();
 }
 
+//
+// ──────────────────────────────────────────────────────────────
+//   Criterion boilerplate
+// ──────────────────────────────────────────────────────────────
+//
+
 criterion_group!(
     benches,
-    bench_network_set,
-    bench_network_get,
-    bench_network_delete,
-    bench_network_exists,
-    bench_network_bulk_operations
+    bench_set,
+    bench_get,
+    bench_del,
+    bench_exists,
+    bench_bulk_set
 );
 criterion_main!(benches);
